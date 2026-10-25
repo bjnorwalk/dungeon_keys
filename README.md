@@ -69,12 +69,12 @@ by Git.
 
 ## Implementation
 
-`main.c` contains the game loop, dungeon generation, entity state, combat, drawing,
-and save/load code. `CMakeLists.txt` downloads and links raylib. The visuals are
+`main.c` contains the game loop, dungeon generation, entity state, combat, and drawing.
+Word loading and save/load code live in `src/`. `CMakeLists.txt` downloads and links raylib. The visuals are
 drawn in code, so the game does not need a separate art bundle.
 
-There is no automated test suite yet. Build checks cover compilation; gameplay,
-controls, and saving need a manual run. Browser saves belong to the site origin
+Automated regression tests cover persistence and word selection. Build checks cover compilation;
+gameplay, controls, and real-browser saving still need a manual run. Browser saves belong to the site origin
 and are separate from desktop save files. Browsers that block local storage can
 still play, but progress is limited to the current session.
 
