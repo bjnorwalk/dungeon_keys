@@ -1,3 +1,5 @@
+#include "src/word_bank.h"
+#include "src/save_data.h"
 #include "raylib.h"
 #ifdef PLATFORM_WEB
 #include <emscripten/emscripten.h>
@@ -185,14 +187,7 @@ static const char *difficultyNames[] = {"", "Easy", "Normal", "Hard"};
 
 // Progression and economy
 static int floorLevel = 1;
-static int playerGold = 0;
-static int highScore = 0;
-
-// Persistent upgrades
-static int upgradeMaxHealth = 0;
-static float upgradeMoveSpeed = 1.0f;
-static float upgradeEnemySlow = 1.0f;
-static int upgradeComboBonus = 0;
+static SaveData progress = {0, 0, 0, 1.0f, 1.0f, 0};
 
 // Flags for high score updates
 static bool newHighAchieved = false;
@@ -206,20 +201,8 @@ static Sound sfxItem;
 static Sound sfxBomb;
 static Sound sfxFreeze;
 
-// Word bank for enemy and item words.  We store all words in a fixed
-// array of strings; new words can be loaded from an external file.
-#define MAX_WORD_BANK 600
-static char wordBank[MAX_WORD_BANK][32];
-static int wordCount = 0;
-
 // -----------------------------------------------------------------------------
 // Forward declarations
-static void InitWordBank(void);
-static void LoadExternalWords(void);
-static const char *GetRandomWordForWave(int wave);
-static const char *GetRandomLongWord(void);
-static void LoadSaveData(void);
-static void SaveSaveData(void);
 static void ResetGame(void);
 static void GenerateDungeon(void);
 static bool IsFloor(int x, int y);
@@ -253,130 +236,6 @@ static void UnloadSoundEffects(void);
 // -----------------------------------------------------------------------------
 // Utility functions
 
-// Initialise the base word list used for enemies and items.  Feel free to
-// extend this list; additional words can also be loaded from an external
-// wordlist.txt file via LoadExternalWords().
-static void InitWordBank(void) {
-    const char *baseWords[] = {
-        // Easy words
-        "cat", "map", "run", "gold", "dark", "door", "loot", "fire",
-        "spell", "sword", "ghost", "crypt", "arrow", "torch", "key", "lock",
-        "orc", "elf", "kobold", "coin", "pit", "trap",
-        // Medium words
-        "python", "typing", "wizard", "dungeon", "monster", "shadow",
-        "potion", "skeleton", "treasure", "portal", "castle", "dagger",
-        "forest", "scroll", "magic", "keyboard", "adventure", "explore",
-        // Harder words
-        "roguelike", "labyrinth", "necromancer", "basilisk", "sorcerer",
-        "enchantment", "catacombs", "rhapsody", "phantasm", "ethereal"
-    };
-    int count = sizeof(baseWords) / sizeof(baseWords[0]);
-    for (int i = 0; i < count && wordCount < MAX_WORD_BANK; i++) {
-        strncpy(wordBank[wordCount], baseWords[i], sizeof(wordBank[wordCount]) - 1);
-        wordBank[wordCount][sizeof(wordBank[wordCount]) - 1] = '\0';
-        wordCount++;
-    }
-}
-
-// Load additional words from wordlist.txt, one per line.  Words longer than
-// 31 characters are truncated.  Lines beginning with # are treated as
-// comments.
-static void LoadExternalWords(void) {
-    FILE *file = fopen("wordlist.txt", "r");
-    if (!file) return;
-    char buffer[128];
-    while (fgets(buffer, sizeof(buffer), file) && wordCount < MAX_WORD_BANK) {
-        // Skip comments and empty lines
-        if (buffer[0] == '#' || buffer[0] == '\n' || buffer[0] == '\0') continue;
-        // Strip newline
-        size_t len = strlen(buffer);
-        if (buffer[len - 1] == '\n') buffer[len - 1] = '\0';
-        // Copy word
-        strncpy(wordBank[wordCount], buffer, sizeof(wordBank[wordCount]) - 1);
-        wordBank[wordCount][sizeof(wordBank[wordCount]) - 1] = '\0';
-        wordCount++;
-    }
-    fclose(file);
-}
-
-// Retrieve a random word appropriate for the current wave.  Earlier waves
-// favour shorter words, while later waves may include longer ones.
-static const char *GetRandomWordForWave(int wave) {
-    // Adjust the effective wave based on difficulty.  Easier difficulty
-    // reduces the wave level so shorter words remain available longer;
-    // harder difficulty increases it so longer words appear sooner.
-    int effectiveWave = wave;
-    if (difficulty == 1 && effectiveWave > 1) effectiveWave--;
-    else if (difficulty == 3) effectiveWave++;
-    int attempts = 0;
-    while (attempts < 40) {
-        int index = rand() % wordCount;
-        const char *w = wordBank[index];
-        size_t len = strlen(w);
-        if (effectiveWave < 3) {
-            if (len <= 5) return w;
-        } else if (effectiveWave < 6) {
-            if (len <= 8) return w;
-        } else {
-            if (len > 4) return w;
-        }
-        attempts++;
-    }
-    return wordBank[rand() % wordCount];
-}
-
-// Retrieve a random longer word for boss battles.  Chooses from words with
-// length >= 8.  If none available, returns a random word.
-static const char *GetRandomLongWord(void) {
-    int attempts = 0;
-    while (attempts < 50) {
-        int index = rand() % wordCount;
-        const char *w = wordBank[index];
-        if (strlen(w) >= 8) return w;
-        attempts++;
-    }
-    return wordBank[rand() % wordCount];
-}
-
-// Load save data from save.dat.  The file stores high score, gold and
-// upgrade levels.  If not present or malformed, defaults are used.
-static void LoadSaveData(void) {
-    FILE *file = fopen("save.dat", "r");
-    if (!file) return;
-    int hs = 0;
-    int gold = 0;
-    int maxH = 0;
-    float moveUp = 1.0f;
-    float slowUp = 1.0f;
-    int comboUp = 0;
-    if (fscanf(file, "%d %d %d %f %f %d", &hs, &gold, &maxH, &moveUp, &slowUp, &comboUp) == 6) {
-        highScore = hs;
-        playerGold = gold;
-        upgradeMaxHealth = maxH;
-        upgradeMoveSpeed = moveUp;
-        upgradeEnemySlow = slowUp;
-        upgradeComboBonus = comboUp;
-    }
-    fclose(file);
-}
-
-// Save save data to save.dat.  Called whenever upgrades change or a new high
-// score is achieved.
-static void SaveSaveData(void) {
-    FILE *file = fopen("save.dat", "w");
-    if (!file) return;
-    fprintf(file, "%d %d %d %.3f %.3f %d\n", highScore, playerGold, upgradeMaxHealth,
-            upgradeMoveSpeed, upgradeEnemySlow, upgradeComboBonus);
-    fclose(file);
-#ifdef PLATFORM_WEB
-    EM_ASM({
-        try {
-            localStorage.setItem('dungeonKeys.save', FS.readFile('save.dat', { encoding: 'utf8' }));
-        } catch (_) { /* The run remains playable without persistent storage. */ }
-    });
-#endif
-}
-
 // Reset the entire game.  Called when starting or restarting.  It does
 // not reset persistent upgrades or gold, but it resets the dungeon,
 // player, enemies, items, traps, boss and related timers.
@@ -393,8 +252,8 @@ static void ResetGame(void) {
         }
     }
     visited[player.y][player.x] = true;
-    player.health = 5 + upgradeMaxHealth;
-    player.maxHealth = 5 + upgradeMaxHealth;
+    player.health = 5 + progress.upgradeMaxHealth;
+    player.maxHealth = 5 + progress.upgradeMaxHealth;
     player.score = 0;
     player.combo = 0;
     player.wave = 1;
@@ -520,24 +379,24 @@ static void SpawnEnemy(void) {
         float diffDelayMult = (difficulty == 1 ? 1.1f : (difficulty == 3 ? 0.9f : 1.0f));
         switch (type) {
             case ENEMY_GOBLIN:
-                enemies[slot].moveDelay = BASE_ENEMY_DELAY_GOBLIN * upgradeEnemySlow * diffDelayMult;
-                enemies[slot].points    = 10 + upgradeComboBonus;
+                enemies[slot].moveDelay = BASE_ENEMY_DELAY_GOBLIN * progress.upgradeEnemySlow * diffDelayMult;
+                enemies[slot].points    = 10 + progress.upgradeComboBonus;
                 enemies[slot].color     = (Color){90, 220, 110, 255};
                 break;
             case ENEMY_SKELETON:
-                enemies[slot].moveDelay = BASE_ENEMY_DELAY_SKELETON * upgradeEnemySlow * diffDelayMult;
-                enemies[slot].points    = 16 + upgradeComboBonus;
+                enemies[slot].moveDelay = BASE_ENEMY_DELAY_SKELETON * progress.upgradeEnemySlow * diffDelayMult;
+                enemies[slot].points    = 16 + progress.upgradeComboBonus;
                 enemies[slot].color     = (Color){230, 230, 210, 255};
                 break;
             case ENEMY_WRAITH:
             default:
-                enemies[slot].moveDelay = BASE_ENEMY_DELAY_WRAITH * upgradeEnemySlow * diffDelayMult;
-                enemies[slot].points    = 25 + upgradeComboBonus;
+                enemies[slot].moveDelay = BASE_ENEMY_DELAY_WRAITH * progress.upgradeEnemySlow * diffDelayMult;
+                enemies[slot].points    = 25 + progress.upgradeComboBonus;
                 enemies[slot].color     = (Color){180, 90, 255, 255};
                 break;
         }
         enemies[slot].moveTimer = 0.0f;
-        strncpy(enemies[slot].word, GetRandomWordForWave(player.wave), sizeof(enemies[slot].word) - 1);
+        strncpy(enemies[slot].word, GetRandomWordForWave(player.wave, difficulty), sizeof(enemies[slot].word) - 1);
         enemies[slot].word[sizeof(enemies[slot].word) - 1] = '\0';
         activeEnemies++;
         return;
@@ -556,7 +415,7 @@ static void RemoveEnemy(int index) {
     // Award score and gold (gold equals points here)
     int gained = enemies[index].points + player.combo * 2;
     player.score += gained;
-    playerGold += gained;
+    progress.playerGold += gained;
     player.combo++;
     char text[32];
     snprintf(text, sizeof(text), "+%d", gained);
@@ -747,7 +606,7 @@ static void SpawnBoss(void) {
         boss.hp = BOSS_WORDS + floorLevel - 1; // Boss gets tougher on higher floors
         strncpy(boss.word, GetRandomLongWord(), sizeof(boss.word) - 1);
         boss.word[sizeof(boss.word) - 1] = '\0';
-        boss.moveDelay = 1.0f * upgradeEnemySlow;
+        boss.moveDelay = 1.0f * progress.upgradeEnemySlow;
         boss.moveTimer = 0.0f;
         boss.active = true;
         inBossFight = true;
@@ -814,7 +673,7 @@ static void UpdateBoss(float dt) {
                 // Award bonus gold and score
                 int bonus = 100 + 50 * floorLevel;
                 player.score += bonus;
-                playerGold += bonus;
+                progress.playerGold += bonus;
                 char buf[32];
                 snprintf(buf, sizeof(buf), "+%d", bonus);
                 AddFloatingText(boss.x * TILE_SIZE, boss.y * TILE_SIZE - 40, buf, GOLD);
@@ -885,38 +744,38 @@ static void EnterShop(void) {
 static void HandleShopInput(void) {
     // Numbers 1–4 correspond to upgrade options
     if (IsKeyPressed(KEY_ONE)) {
-        if (playerGold >= COST_UPGRADE_HEALTH) {
-            playerGold -= COST_UPGRADE_HEALTH;
-            upgradeMaxHealth++;
+        if (progress.playerGold >= COST_UPGRADE_HEALTH) {
+            progress.playerGold -= COST_UPGRADE_HEALTH;
+            progress.upgradeMaxHealth++;
             player.maxHealth++;
             player.health++;
             AddFloatingText(SCREEN_WIDTH/2 - 60, 120, "+1 MAX HP", GREEN);
             PlaySound(sfxItem);
-            SaveSaveData();
+            SaveSaveData(&progress);
         }
     } else if (IsKeyPressed(KEY_TWO)) {
-        if (playerGold >= COST_UPGRADE_MOVES) {
-            playerGold -= COST_UPGRADE_MOVES;
-            upgradeMoveSpeed *= 0.9f;
+        if (progress.playerGold >= COST_UPGRADE_MOVES) {
+            progress.playerGold -= COST_UPGRADE_MOVES;
+            progress.upgradeMoveSpeed *= 0.9f;
             AddFloatingText(SCREEN_WIDTH/2 - 70, 120, "SPEED UP", GREEN);
             PlaySound(sfxItem);
-            SaveSaveData();
+            SaveSaveData(&progress);
         }
     } else if (IsKeyPressed(KEY_THREE)) {
-        if (playerGold >= COST_UPGRADE_SLOW) {
-            playerGold -= COST_UPGRADE_SLOW;
-            upgradeEnemySlow *= 1.1f;
+        if (progress.playerGold >= COST_UPGRADE_SLOW) {
+            progress.playerGold -= COST_UPGRADE_SLOW;
+            progress.upgradeEnemySlow *= 1.1f;
             AddFloatingText(SCREEN_WIDTH/2 - 80, 120, "ENEMIES SLOWER", GREEN);
             PlaySound(sfxItem);
-            SaveSaveData();
+            SaveSaveData(&progress);
         }
     } else if (IsKeyPressed(KEY_FOUR)) {
-        if (playerGold >= COST_UPGRADE_COMBO) {
-            playerGold -= COST_UPGRADE_COMBO;
-            upgradeComboBonus++;
+        if (progress.playerGold >= COST_UPGRADE_COMBO) {
+            progress.playerGold -= COST_UPGRADE_COMBO;
+            progress.upgradeComboBonus++;
             AddFloatingText(SCREEN_WIDTH/2 - 80, 120, "+COMBO BONUS", GREEN);
             PlaySound(sfxItem);
-            SaveSaveData();
+            SaveSaveData(&progress);
         }
     }
     // Exit shop
@@ -1076,7 +935,7 @@ static void DrawMenuScreen(void) {
     DrawText(subtitle, SCREEN_WIDTH/2 - stWidth/2, SCREEN_HEIGHT/2 - 90, 30, LIGHTGRAY);
     DrawText(prompt, SCREEN_WIDTH/2 - pWidth/2, SCREEN_HEIGHT/2 - 30, 20, GRAY);
     char buf[80];
-    snprintf(buf, sizeof(buf), "High Score: %d", highScore);
+    snprintf(buf, sizeof(buf), "High Score: %d", progress.highScore);
     int bWidth = MeasureText(buf, 22);
     DrawText(buf, SCREEN_WIDTH/2 - bWidth/2, SCREEN_HEIGHT/2 + 10, 22, LIGHTGRAY);
     // Display current difficulty and hint to change it
@@ -1108,7 +967,7 @@ static void DrawHUD(void) {
     DrawText(status1, 18, MAP_HEIGHT * TILE_SIZE + 50, 20, LIGHTGRAY);
     // Status line 2 with gold and high score
     char status2[256];
-    snprintf(status2, sizeof(status2), "Gold: %d   High: %d", playerGold, highScore);
+    snprintf(status2, sizeof(status2), "Gold: %d   High: %d", progress.playerGold, progress.highScore);
     DrawText(status2, 18, MAP_HEIGHT * TILE_SIZE + 75, 20, LIGHTGRAY);
     // Footer
     DrawText("Backspace deletes, Enter clears", 18, MAP_HEIGHT * TILE_SIZE + 100, 16, GRAY);
@@ -1125,10 +984,10 @@ static void DrawHUD(void) {
         DrawText(over, SCREEN_WIDTH/2 - ow/2, SCREEN_HEIGHT/2 - 120, 64, RED);
         // High score update once
         if (!highUpdated) {
-            if (player.score > highScore) {
-                highScore = player.score;
+            if (player.score > progress.highScore) {
+                progress.highScore = player.score;
                 newHighAchieved = true;
-                SaveSaveData();
+                SaveSaveData(&progress);
             }
             highUpdated = true;
         }
@@ -1138,7 +997,7 @@ static void DrawHUD(void) {
         int fw = MeasureText(finalBuf, 28);
         DrawText(finalBuf, SCREEN_WIDTH/2 - fw/2, SCREEN_HEIGHT/2 - 40, 28, RAYWHITE);
         char highBuf[128];
-        snprintf(highBuf, sizeof(highBuf), "High Score: %d", highScore);
+        snprintf(highBuf, sizeof(highBuf), "High Score: %d", progress.highScore);
         int hw = MeasureText(highBuf, 22);
         DrawText(highBuf, SCREEN_WIDTH/2 - hw/2, SCREEN_HEIGHT/2 - 5, 22, LIGHTGRAY);
         if (newHighAchieved) {
@@ -1163,10 +1022,10 @@ static void DrawHUD(void) {
         snprintf(opt2, sizeof(opt2), "2) Faster Player (%d gold)", COST_UPGRADE_MOVES);
         snprintf(opt3, sizeof(opt3), "3) Slower Enemies (%d gold)", COST_UPGRADE_SLOW);
         snprintf(opt4, sizeof(opt4), "4) +Combo Bonus (%d gold)", COST_UPGRADE_COMBO);
-        DrawText(opt1, 40, MAP_HEIGHT * TILE_SIZE + 50, 22, playerGold >= COST_UPGRADE_HEALTH ? GREEN : GRAY);
-        DrawText(opt2, 40, MAP_HEIGHT * TILE_SIZE + 80, 22, playerGold >= COST_UPGRADE_MOVES ? GREEN : GRAY);
-        DrawText(opt3, 40, MAP_HEIGHT * TILE_SIZE + 110, 22, playerGold >= COST_UPGRADE_SLOW ? GREEN : GRAY);
-        DrawText(opt4, 40, MAP_HEIGHT * TILE_SIZE + 140, 22, playerGold >= COST_UPGRADE_COMBO ? GREEN : GRAY);
+        DrawText(opt1, 40, MAP_HEIGHT * TILE_SIZE + 50, 22, progress.playerGold >= COST_UPGRADE_HEALTH ? GREEN : GRAY);
+        DrawText(opt2, 40, MAP_HEIGHT * TILE_SIZE + 80, 22, progress.playerGold >= COST_UPGRADE_MOVES ? GREEN : GRAY);
+        DrawText(opt3, 40, MAP_HEIGHT * TILE_SIZE + 110, 22, progress.playerGold >= COST_UPGRADE_SLOW ? GREEN : GRAY);
+        DrawText(opt4, 40, MAP_HEIGHT * TILE_SIZE + 140, 22, progress.playerGold >= COST_UPGRADE_COMBO ? GREEN : GRAY);
         const char *exitMsg = "Enter to continue to next floor";
         int emw = MeasureText(exitMsg, 20);
         DrawText(exitMsg, SCREEN_WIDTH/2 - emw/2, MAP_HEIGHT * TILE_SIZE + 170, 20, LIGHTGRAY);
@@ -1392,7 +1251,7 @@ static void UpdateDrawFrame(void) {
                 // on hard difficulty it is shorter (more frequent spawns).  Upgrades
                 // to player speed reduce the spawn rate further.
                 float diffSpawnMult = (difficulty == 1 ? 1.3f : (difficulty == 3 ? 0.8f : 1.0f));
-                float spawnRate = BASE_SPAWN_RATE * upgradeMoveSpeed * diffSpawnMult;
+                float spawnRate = BASE_SPAWN_RATE * progress.upgradeMoveSpeed * diffSpawnMult;
                 spawnTimer += dt;
                 if (!inBossFight && spawnTimer >= spawnRate) {
                     SpawnEnemy();
@@ -1513,16 +1372,8 @@ int main(void) {
     // Initialise data
     InitWordBank();
     LoadExternalWords();
-#ifdef PLATFORM_WEB
-    // Browser storage keeps the existing save format without a server.
-    EM_ASM({
-        try {
-            const saved = localStorage.getItem('dungeonKeys.save');
-            if (saved) FS.writeFile('save.dat', saved);
-        } catch (_) { /* Storage may be unavailable in private browsing. */ }
-    });
-#endif
-    LoadSaveData();
+    RestoreBrowserSave();
+    LoadSaveData(&progress);
     InitSoundEffects();
     ResetGame();
     gameState = STATE_MENU;
@@ -1532,7 +1383,7 @@ int main(void) {
     while (!WindowShouldClose()) UpdateDrawFrame();
 #endif
     // Save on exit
-    SaveSaveData();
+    SaveSaveData(&progress);
     UnloadSoundEffects();
     CloseAudioDevice();
     CloseWindow();
