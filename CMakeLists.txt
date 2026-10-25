@@ -18,7 +18,7 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(raylib)
 
-add_executable(typing_roguelike_polished main.c)
+add_executable(typing_roguelike_polished main.c src/word_bank.c src/save_data.c)
 
 target_link_libraries(typing_roguelike_polished PRIVATE raylib)
 
