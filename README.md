@@ -1,19 +1,62 @@
-# Dungeon Keys: Rogue Edition
+# Dungeon Keys
 
-A typing roguelike written in C with raylib. Move through a dungeon and type the
-words over enemies to defeat them. Each floor introduces new waves, traps, and
-boss encounters.
+A typing roguelike built in C: move through a dungeon and type the words above enemies to defeat them.
 
-Between floors, a shop lets you spend gold on upgrades. Bombs, freeze pickups,
-and health pickups change how a run plays out. High scores and permanent upgrades
-are saved between runs.
+[Play in the browser](https://bjnorwalk.github.io/dungeon_keys/)
 
-## Play in the browser
+![Dungeon Keys gameplay with enemy words and a score after a successful typed attack](docs/images/demo.jpg)
 
-[Play Dungeon Keys](https://bjnorwalk.github.io/dungeon_keys/).
-Use a desktop keyboard. Click the game to focus it, then press Enter to start.
-The browser build keeps upgrades and high scores in local storage when available.
-It uses the same C game code as the desktop build.
+A browser run after typing an enemy word: the score and gold increased to 10. Enemy words, health, wave, and floor are visible.
+
+## The idea
+
+Dungeon Keys combines keyboard movement with word-based attacks. Floors introduce waves, traps, and bosses; shops let players spend earned gold on upgrades between floors.
+
+The engineering goal is to run the same gameplay code on desktop and in a browser, with platform-specific saving kept behind a small persistence module.
+
+## Try it in one minute
+
+Use a desktop keyboard.
+
+1. Open the game, click inside it, and press Enter.
+2. Move with the arrow keys or WASD.
+3. Type the words displayed above enemies to attack them.
+4. Between floors, use the shop to buy upgrades.
+
+Browser upgrades and high scores use local storage when available. They are separate from desktop save files.
+
+## Engineering work in this repository
+
+The project implements the game loop, dungeon generation, enemies, combat, upgrades, word selection, and progress saving in C. raylib supplies the graphics and input APIs; Emscripten compiles the browser version.
+
+Word-bank and save-state responsibilities have been extracted from the main file into modules with standalone regression tests. The caller owns save state rather than sharing gameplay globals with the persistence module.
+
+## Architecture
+
+```text
+main.c: gameplay, entities, combat and rendering
+  ├─ src/word_bank.c: loading and selecting enemy words
+  ├─ src/save_data.c: progress serialization
+  │    ├─ Desktop → save.dat
+  │    └─ Browser → local storage
+  └─ raylib: graphics and input
+
+CMake → native executable
+CMake + Emscripten → HTML / JavaScript / WebAssembly
+```
+
+## Key decisions and tradeoffs
+
+- **Share gameplay across platforms.** One C implementation limits divergence between desktop and browser versions. Browser packaging, storage, and keyboard focus still need their own validation.
+- **Keep persistence small and compatible.** The existing six-field save format and browser storage key are preserved. There is no account-based or cross-device synchronization.
+- **Test logic without opening a window.** Persistence and word selection can be checked independently of raylib rendering. Those tests do not establish that combat pacing, keyboard handling, or the full game feels right.
+- **Draw visuals in code.** The game avoids a separate art bundle, while keeping visual complexity within what the rendering code supports.
+
+## Current limits
+
+The browser game expects a desktop keyboard. Browsers that block local storage can still play, but progress lasts only for the current session. Desktop saves are local to the executable's working directory.
+
+Automated checks cover persistence, word selection, and native/browser compilation. Gameplay, focus, controls, and real-browser save behavior need manual playtesting.
 
 ## Run locally
 
@@ -53,8 +96,7 @@ python3 -m http.server 8000 --directory build-web/web
 Open `http://localhost:8000`. Serve the generated HTML, JavaScript, and WebAssembly
 files together; opening the HTML directly from disk will not load the game.
 GitHub Actions compiles this build and publishes it to GitHub Pages. Pull requests
-build it without publishing. The hosting branch also publishes while its port is
-under review; after merging, `main` handles future deployments.
+build it without publishing. The merged browser port is available from `main`.
 
 ## Controls and saves
 
